@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "smart-router": {
+      "source": {
+        "source": "github",
+        "repo": "allenlong2007/smart-router"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "smart-router@smart-router": true
+  }
+}
