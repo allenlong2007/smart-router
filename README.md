@@ -28,12 +28,38 @@ A turn moves up one model, for the rest of that turn, when:
 - **on Sonnet** its edits spread over more than 6 files.
 - a reply is cut off (`max_tokens`) or refused.
 
+A Haiku turn moves to the session model instead of Sonnet when Sonnet's cold cache would make Sonnet the more expensive of the two.
+
 Also:
 
-- **Complaints:** if you say the last cheap answer was wrong ("that didn't work", "not what I asked", "try again"), the next two turns stay on your session model.
+- **Complaints:** if you say the last cheap answer was wrong ("that's wrong", "didn't work", "not what I asked", "try again"), the next two turns stay on your session model, and the mistake is recorded (see below).
 - **Effort:** the effort setting is never lowered. A cheaper model is asked to think exactly as hard as your session model would.
-- **Large conversations:** past 40k tokens of context, the turn won't switch to a model whose prompt cache has gone cold, because re-reading the conversation at full price would cost more than the switch saves.
-- **Read-only subagents** (Explore, claude-code-guide) run on Sonnet, and statusline-setup runs on Haiku, unless the caller picked a model.
+- **Subagents** keep whatever model their own definition or the caller picks.
+
+## It learns from its mistakes
+
+Every turn is filed under a kind of request, for example `lookup:what`, `edit:rename` or `run-report`. The router keeps a record of how each model did on each kind. Recent turns count most, and older ones fade out over about 20 turns.
+
+- **Mistakes:** a turn that had to move up a model counts as one failure. A turn you said was wrong counts as two. Once a model fails more than about a third of the time on a kind of request (from about 3 recent turns), it stops being tried for that kind. The next model up is tried instead: Sonnet before your session model.
+- **Second chances:** a model that was ruled out gets one retry after 8 turns, so a bad patch doesn't lock it out for good. Steady clean runs earn back trust as old failures fade.
+- **Costs:** each turn's real cost is measured, including what your session model later pays to cache-write the cheap turn's tokens when it takes over again. This is kept per kind of request, separately for short and long conversations. If a cheaper model didn't actually save at least 10% for a kind of request, it stops being used for that kind (with the same retry).
+- The measured steps and output for each kind also feed the cost estimate below.
+
+`/route learned` shows the record. `/route forget` clears it. `/route learning off` turns learning off and routes by the rules alone.
+
+## It won't switch when switching costs more
+
+Prompt caching makes switching models in a long conversation expensive. A model that hasn't seen the conversation has to cache-write all of it. For Sonnet that costs 20× an Opus cache read, so in a long conversation a Sonnet turn can cost more than staying on Opus. A Haiku cache write costs about the same as an Opus cache read.
+
+Before every turn, the router estimates the cost on each eligible model from:
+
+- how much of the conversation each model already has cached
+- the expected steps and output (measured defaults, then the learned record)
+- the session model's later cache-write of the cheap turn's tokens
+
+A cheaper model is used only if it is estimated to save at least 10%. Deep into a long conversation that bar rises to 50%, because measured savings there were smaller than estimated. In practice, long conversations keep edits on your session model and send lookups to Haiku only when Haiku already holds most of the conversation.
+
+Routing state, such as which model holds which part of the conversation, is saved per session, so a resumed session carries on where it left off.
 
 ## Controls
 
@@ -42,12 +68,20 @@ Also:
 - `/route safe` uses Haiku and your session model only. Sonnet is still where a Haiku turn moves first.
 - `/route off` turns routing off. Setting the `SMART_ROUTER=off` environment variable does the same for one process.
 - `/route classifier on|off` turns the Haiku triage of unclear prompts on or off.
-- `/route reset` clears the stats.
+- `/route learned` shows the learned record, `/route forget` clears it, and `/route learning on|off` turns learning on or off.
+- `/route reset` clears the stats. `/route` also shows the estimated spend against an all-session-model baseline.
 - Start a prompt with `!full`, `!sonnet` or `!light` to pick the starting model for that turn.
 
 ## Results
 
-On a benchmark of 8 coding tasks, run twice with the router on and twice with it off (session model Opus), every run was correct in both arms. The router lowered spend by 45% (37% once caches were warm) and was faster at the median. See [BENCHMARK.md](BENCHMARK.md).
+With Opus as the session model, across 67 graded runs (45 with the router, 22 without), every run was correct:
+
+- **Scoped edits** in a multi-file project (add a flag, write tests, update docs, rename across files) ran on Sonnet, cost 55–62% less, and finished about twice as fast.
+- **Hard tasks** (bug fixes, new features) stayed on Opus at the same cost.
+- **7-turn working sessions** cost 20% less on average: $0.32 against $0.40.
+- **Small lookups** cost about 99% less on Haiku.
+
+See [BENCHMARK.md](BENCHMARK.md) for the method, every number, and the limits.
 
 ## Install
 

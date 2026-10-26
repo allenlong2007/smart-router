@@ -5,7 +5,7 @@ const SESSION_MODEL = 'claude-opus-5-5'
 const USAGE = { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
 // Stands for the engine: records which model and effort each step was sent with.
-function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: string; env?: Record<string, string> } = {}) {
+function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: string; env?: Record<string, string>; usage?: typeof USAGE } = {}) {
   mock.store(on)
   mock.env(on, opts.env ?? {})
   on('command.register', () => ({ value: { command: 'route' } }))
@@ -22,7 +22,7 @@ function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: st
       answer: '',
       toolUses: [],
       stopReason: (opts.stopReason ?? 'end_turn') as 'end_turn',
-      usage: null,
+      usage: opts.usage === undefined ? null : { ...opts.usage, model: e.model },
     }
   })
   on('tool.call', () => ({ result: {} }))
@@ -165,7 +165,7 @@ test('SMART_ROUTER=off leaves every turn on the session model', async ($, on) =>
   expect(sent).toEqual([SESSION_MODEL])
 })
 
-test('Explore subagents run on Sonnet unless the caller chose a model', async ($, on) => {
+test('subagents keep the model their own definition or caller picks', async ($, on) => {
   engine(on, [])
   const seen: (string | undefined)[] = []
   on('agent.spawn', (_, e) => {
@@ -177,10 +177,9 @@ test('Explore subagents run on Sonnet unless the caller chose a model', async ($
   const spawn = (args: object) =>
     $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'p', parentModel: SESSION_MODEL, ...args } as any)
   await spawn({ subagentType: 'Explore' })
-  await spawn({ subagentType: 'Explore', model: 'opus' })
   await spawn({ subagentType: 'general-purpose' })
 
-  expect(seen).toEqual(['sonnet', 'opus', undefined])
+  expect(seen).toEqual([undefined, undefined])
 })
 
 test('running the tests to report on them starts on Haiku; asking for a fix does not', async ($, on) => {
@@ -194,4 +193,81 @@ test('running the tests to report on them starts on Haiku; asking for a fix does
   await step($, 't2')
 
   expect(sent).toEqual(['haiku', SESSION_MODEL])
+})
+
+test('turns of a kind that keep escalating off Haiku start on Sonnet next time', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  await begin($)
+
+  for (let i = 1; i <= 4; i++) {
+    await $.turn.start({ text: 'what is in config.ts?', turnId: `t${i}` })
+    await step($, `t${i}`, 0)
+    await $.tool.call({ tool: 'Edit', file_path: '/a.ts', old_string: 'a', new_string: 'b' })
+    await step($, `t${i}`, 1)
+    await $.turn.complete({ turnId: `t${i}`, answer: '' } as any)
+  }
+  sent.length = 0
+  await $.turn.start({ text: 'what is in main.ts?', turnId: 't5' })
+  await step($, 't5', 0)
+
+  expect(sent).toEqual(['sonnet'])
+})
+
+test('a complaint is remembered against the kind of request that caused it', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  await begin($)
+
+  for (let i = 1; i <= 3; i++) {
+    await $.turn.start({ text: 'add a docstring to foo', turnId: `a${i}` })
+    await step($, `a${i}`)
+    await $.turn.complete({ turnId: `a${i}`, answer: '' } as any)
+    await $.turn.start({ text: "that's wrong, try again", turnId: `b${i}` })
+    await step($, `b${i}`)
+    await $.turn.complete({ turnId: `b${i}`, answer: '' } as any)
+    // The two turns after a complaint stay on the session model.
+    for (const s of ['c', 'd']) {
+      await $.turn.start({ text: 'what is 1+1?', turnId: `${s}${i}` })
+      await step($, `${s}${i}`)
+      await $.turn.complete({ turnId: `${s}${i}`, answer: '' } as any)
+    }
+  }
+  sent.length = 0
+  await $.turn.start({ text: 'add a docstring to bar', turnId: 'z' })
+  await step($, 'z')
+
+  expect(sent).toEqual([SESSION_MODEL])
+})
+
+test("asking what is wrong with code is a debugging question, not a complaint about the last answer", async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  await begin($)
+
+  await $.turn.start({ text: 'what does main.py do?', turnId: 't1' })
+  await step($, 't1')
+  await $.turn.complete({ turnId: 't1', answer: '' } as any)
+  await $.turn.start({ text: 'what is wrong in util.py?', turnId: 't2' })
+  await step($, 't2')
+
+  expect(sent).toEqual(['haiku', SESSION_MODEL])
+})
+
+test('savings are measured against the session model with its cache, not a cold one', async ($, on) => {
+  const sent: string[] = []
+  // Each request reads 30k cached tokens, writes 2k and replies with 100.
+  engine(on, sent, { usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 30_000, cache_creation_input_tokens: 2_000 } })
+  await begin($)
+
+  await $.turn.start({ text: 'what does main.py do?', turnId: 't1' })
+  await step($, 't1', 0)
+  await step($, 't1', 1)
+  await $.turn.complete({ turnId: 't1', answer: '' } as any)
+  const status = await $.command.run({ command: 'route', args: '' } as any)
+
+  expect(sent).toEqual(['haiku', 'haiku'])
+  // Haiku: about $0.0015. Opus would have paid about $0.032: the first request
+  // writes past the shared opening, the second reads it all from cache.
+  expect((status as any).text).toMatch(/Estimated spend \$0\.00 vs \$0\.03 /)
 })

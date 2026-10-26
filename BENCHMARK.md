@@ -1,6 +1,61 @@
 # Benchmark
 
-**Date:** 2026-10-26. **Claude Code:** 2.1.310. **Router version:** 0.2.0.
+## Larger tasks and multi-turn sessions (v0.3)
+
+**Date:** 2026-10-26. **Claude Code:** 2.1.310. **Session model:** Opus (`claude -p --model opus`).
+
+### Method
+
+The test project is a small multi-file inventory app: models, storage, report, CLI, utils, tests and a README, with 1 planted bug.
+
+- **Single tasks:** 7 larger tasks, each run in a fresh copy of the project as a fresh session.
+- **Multi-turn sessions:** the same 7-turn conversation each time, chained with `--resume`: an overview, then fix the bug, then a lookup, then add a `--json` flag, then run the tests, then write a test for the flag, then "thanks".
+- **Baseline:** the same runs with no mod loaded.
+
+Grading was automatic:
+
+- the test suite must pass
+- hidden checks must pass: discounted totals, `list --json` output parsed as JSON, removing an item, no stale names left after a rename
+- for the test-writing task, the new tests must catch a deliberately broken missing-file case
+- for the explanation task, the answer must name the right functions
+
+Cost is the API's own billed total.
+
+### Single tasks
+
+| Task | Router chose | Correct (router / baseline) | Avg cost router | Avg cost baseline | Saved |
+|---|---|---|---|---|---|
+| G1 Add a `--json` flag to the list command | Sonnet | 5/5 · 2/2 | $0.081 | $0.195 | 59% |
+| G2 Write unit tests for storage.py (load, save, missing file) | Sonnet | 4/4 · 2/2 | $0.074 | $0.163 | 55% |
+| G3 Document the CLI commands and options in the README | Sonnet | 4/4 · 2/2 | $0.088 | $0.216 | 59% |
+| G4 Rename `parse_money` to `parse_price` and update callers | Sonnet | 4/4 · 2/2 | $0.074 | $0.194 | 62% |
+| G5 Fix the discount bug in `Item.total()` | Opus | 3/3 · 2/2 | $0.155 | $0.167 | ≈0% (same model) |
+| G6 Implement a `remove` command with tests | Opus | 2/2 · 2/2 | $0.217 | $0.206 | ≈0% (same model) |
+| G7 Explain how the CLI loads and saves data | Opus or Sonnet (triaged) | 3/3 · 2/2 | $0.108 | $0.126 | 15% |
+
+### Multi-turn sessions
+
+| | Sessions | Correct | Avg cost | Range | Avg time |
+|---|---|---|---|---|---|
+| Baseline (Opus only) | 8 | 8/8 | $0.402 | $0.35–0.44 | 93 s |
+| Router v0.3 | 11 | 11/11 | $0.320 (20% less) | $0.27–0.42 | 82 s |
+
+### What the sessions taught (and the fixes made)
+
+- **Return cost.** When Opus takes back over after a cheap turn, it must cache-write that turn's tokens at $8 per million. Measured mid-session, that rewrite ate most of a Haiku lookup's saving. v0.3 measures it on the next turn's first request and records it against that kind of request, separately for short and long conversations. It then stops routing where the saving disappears. In the last runs it measured Sonnet overviews and mid-session Sonnet edits at 109–110% of the Opus cost, and kept those turns on Opus. Lookups and run-and-report turns measured 17% and 6% of the Opus cost, and stay on Haiku.
+- **Cold caches.** A model that hasn't seen a long conversation has to cache-write all of it, and for Sonnet that costs 20× an Opus cache read. The estimator now counts what each model holds, so long conversations keep edits on Opus.
+- **Subagent override removed.** v0.2 sent the Explore subagent to Sonnet. Measured, that cost more than the subagent's own default, so subagents now keep their own model.
+- **Honest accounting.** `/route` reports spend against what Opus would have paid with its cache as it stood. In the final runs it reported 26% saved, and its spend total matched the API's billing to the cent.
+
+### Limits
+
+Raw token counts are about the same with and without the router: 681k against 711k per session. What drops is cost-weighted usage, because Haiku and Sonnet tokens cost a fraction of Opus tokens. Results on a real, larger codebase will differ. The learned record adapts to that codebase as it goes.
+
+---
+
+## Small tasks (v0.2)
+
+**Router version:** 0.2.0.
 
 ## Method
 
