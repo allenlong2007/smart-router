@@ -1,0 +1,5 @@
+{
+  "name": "smart-router",
+  "version": "0.2.0",
+  "description": "Starts each turn on the cheapest capable model (Haiku, then Sonnet, then your session model) and climbs a rung whenever a task proves harder."
+}

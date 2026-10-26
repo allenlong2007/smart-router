@@ -1,0 +1,5 @@
+{
+  "name": "smart-router",
+  "owner": { "name": "smart-router" },
+  "plugins": [{ "name": "smart-router", "source": "./" }]
+}
