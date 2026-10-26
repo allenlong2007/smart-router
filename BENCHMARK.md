@@ -1,5 +1,51 @@
 # Benchmark
 
+## Summary: more work per dollar
+
+Each suite below was run with and without the router, with Opus as the session model. Cost is the API's own billed total. Every run was graded automatically by test suites and hidden checks.
+
+| Suite | Cost of one pass (router / baseline) | Tasks correct | Correct tasks per $10 |
+|---|---|---|---|
+| Small project, 8 tasks | $0.62 / $1.30 (52% less) | 100% / 100% | 129 / 62 |
+| Mid project, 7 tasks + a 7-turn session | $1.12 / $1.67 (33% less) | 100% / 100% | 72 / 48 |
+| **click** (13k lines, 2,262 tests), 7 tasks + a 7-turn session | $1.83 / $2.40 (24% less) | 94% / 94% | 41 / 31 |
+| **All** | **$3.57 / $5.37 (34% less)** | **98% / 98%** | **66 / 44: 51% more work per dollar** |
+
+### Cost-weighted usage vs raw tokens
+
+- **Raw tokens** count every token the same, whichever model processed it.
+- **Cost-weighted usage** counts each token at its model's price.
+
+Per million tokens, this build billed:
+
+| Model | Input | Output | Cache read | Cache write |
+|---|---|---|---|---|
+| Opus | $4 | $20 | $0.20 | $8 |
+| Sonnet | $2 | $10 | $0.10 | $4 |
+| Haiku | $0.10 | $0.50 | $0.01 | $0.20 |
+
+So a token on Sonnet weighs half an Opus token, and a token on Haiku weighs one fortieth. A turn moved from Opus to Haiku can use the same raw tokens or more and still cost about 97% less. Your bill, and usage limits weighted by model, follow cost-weighted usage. That is the number the router lowers.
+
+Raw tokens rose about 5% on the small suite, and fell 11% on the mid project and 19% on click. In the long sessions, cheaper turns left a smaller context for later Opus turns to re-read.
+
+## Large real-world project: click (v0.3)
+
+**Project:** [pallets/click](https://github.com/pallets/click), about 13k lines of source and 16k of tests. The project's own 2,262-test suite was the main grader. 2 runs per arm per task.
+
+| Task | Router chose | Correct (router · baseline) | Avg cost router | Avg cost baseline |
+|---|---|---|---|---|
+| K1 Which function decides the extra info shown in `--help`? | Haiku / Opus (triaged) | 2/2 · 2/2 | $0.074 | $0.136 |
+| K3 Write unit tests for `make_str` (must catch a planted change) | Opus | 2/2 · 2/2 | $0.203 | $0.185 |
+| K4 Rename a helper across files and update callers | Sonnet | 2/2 · 2/2 | $0.070 | $0.154 |
+| K5 Rewrite a docstring | Sonnet | 2/2 · 2/2 | $0.056 | $0.121 |
+| K6 Fix a planted `IntRange` clamping bug | Opus | 2/2 · 2/2 | $0.168 | $0.175 |
+| K7 Add a `ByteSize` parameter type, export it, add tests | Opus | 1/2 · 1/2 | $0.401 | $0.411 |
+| K8 Explain how parameter processing order is decided | Opus (triaged) | 2/2 · 2/2 | $0.203 | $0.195 |
+| 7-turn session: overview, bug fix, lookup, tests, test run, new feature, thanks | mixed | 2/2 · 2/2 | $0.657 | $1.029 (36% less) |
+
+- **K7 misses:** both ran on Opus in their arm. The router run added an import that broke click's lightweight-imports test, and the baseline run left a syntax error in a test file.
+- **K2 dropped:** "run test_basic.py and report the count" is left out of the comparison. The benchmark harness allowed `python3`, but every model typed `python`, so all runs in both arms were blocked. On that task, the router moved Haiku up to Sonnet after 2 blocked commands, as designed.
+
 ## Larger tasks and multi-turn sessions (v0.3)
 
 **Date:** 2026-10-26. **Claude Code:** 2.1.310. **Session model:** Opus (`claude -p --model opus`).

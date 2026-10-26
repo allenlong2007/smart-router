@@ -74,7 +74,11 @@ Routing state, such as which model holds which part of the conversation, is save
 
 ## Results
 
-With Opus as the session model, across 67 graded runs (45 with the router, 22 without), every run was correct:
+Across three benchmark suites, from a small project up to click (13k lines and its 2,262-test suite), the router did **51% more correct work per dollar** at the same success rate: 98% with it, 98% without. A full pass cost $3.57 with the router against $5.37 on Opus alone.
+
+The saving is in cost-weighted usage, which counts each token at its model's price. Your bill follows that number. A Haiku token costs one fortieth of an Opus token and a Sonnet token half, so the router saves money even where raw token counts stay level. On the larger projects, raw tokens also fell, by 11–19%.
+
+Earlier rounds, with Opus as the session model, over 67 graded runs (45 with the router, 22 without), all correct:
 
 - **Scoped edits** in a multi-file project (add a flag, write tests, update docs, rename across files) ran on Sonnet, cost 55–62% less, and finished about twice as fast.
 - **Hard tasks** (bug fixes, new features) stayed on Opus at the same cost.
