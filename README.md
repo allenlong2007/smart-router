@@ -54,7 +54,7 @@ On a benchmark of 8 coding tasks, run twice with the router on and twice with it
 At the prompt of a terminal session:
 
 ```
-/plugin install smart-router --marketplace <owner>/smart-router
+/plugin install smart-router --marketplace allenlong2007/smart-router
 ```
 
 Answer `y` to add the marketplace, then choose the **user** scope so the mod runs in every project and session.
@@ -62,10 +62,10 @@ Answer `y` to add the marketplace, then choose the **user** scope so the mod run
 From a shell:
 
 ```
-claude plugin install smart-router --marketplace <owner>/smart-router
+claude plugin install smart-router --marketplace allenlong2007/smart-router
 ```
 
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `<owner>/smart-router`, then Add plugin.
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `allenlong2007/smart-router`, then Add plugin.
 
 A private repository installs only for people who can read it on GitHub and whose machine already holds a git credential for github.com: an SSH key, or `gh auth login` followed by `gh auth setup-git`.
 
