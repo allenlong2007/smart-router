@@ -28,6 +28,40 @@ So a token on Sonnet weighs half an Opus token, and a token on Haiku weighs one 
 
 Raw tokens rose about 5% on the small suite, and fell 11% on the mid project and 19% on click. In the long sessions, cheaper turns left a smaller context for later Opus turns to re-read.
 
+## Splitting work across models (v0.4)
+
+**Question:** does handing parts of a task to cheaper subagents (Haiku, Sonnet) save money without hurting results, when the session model is Opus 5.5?
+
+**Setup:** click 8.1.7, `claude -p` on Opus 5.5, account plugins off, learning off, 2 runs per arm per task. Three arms:
+
+- **v0.3:** the turn router alone.
+- **v0.4:** v0.3 plus subagent routing and a gentle note telling Opus it may delegate.
+- **v0.4 forced:** the same, but the note says delegation is required for searches and bulk edits.
+
+Ten tasks: the seven from before plus three bigger ones (add docstrings to 72 functions across 4 files without changing code; give file:line for all 65 names click exports; list all 33 `echo(` calls).
+
+| Task | v0.3 | v0.4 | v0.4 forced |
+|---|---|---|---|
+| 72 docstrings | 2/2 $0.41 | 2/2 $0.50 | 2/2 $0.70 (Sonnet 47%) |
+| rename + docstrings + tests | 2/2 $0.27 | 2/2 $0.27 | 2/2 $0.32 |
+| 33 echo calls | 1/2 $0.23 | 2/2 $0.24 | 2/2 $0.26 |
+| env var reads | 2/2 $0.22 | 2/2 $0.23 | 0/2 $0.29 (see below) |
+| explain | 2/2 $0.17 | 2/2 $0.17 | 2/2 $0.18 |
+| 65 exports | 2/2 $0.26 | 2/2 $0.28 | 2/2 $0.31 |
+| module survey | 2/2 $0.24 | 2/2 $0.23 | 2/2 $0.28 |
+| all 10 tasks | 19/20 $5.01 | 20/20 $5.27 | |
+
+**Findings:**
+
+- With a gentle note, Opus 5.5 never delegated. It did each task with 3 to 8 Bash calls, often one script for a whole bulk edit. There was nothing cheap left to hand off.
+- Forced delegation cost more on every task (10 to 70%) and was slower. Opus still read the files, wrote the brief, and checked the result, so the subagent's cost landed on top.
+- The Haiku subagents themselves were accurate (33/33, 65/65, all 17 env var lines) and cost about $0.005 each.
+- The forced env var runs scored 0/2 because Opus answered first and then sent a short follow-up when a background subagent finished. The grader reads only the last message. The list itself was right, but it is a real usability cost of background subagents.
+
+**What shipped in v0.4:** subagent routing stays on (when Opus starts a subagent on its own, it runs on the cheapest model its job allows). The delegation note is off by default (`/route delegate on` to try it). Older Opus models are always replaced by Opus 5.5.
+
+**Limits:** small samples (2 runs). Single headless tasks with short context. In a long interactive session Opus re-reads a large context on every step, so handing a wide search to a fresh Haiku subagent may pay off there. That was not measured.
+
 ## Large real-world project: click (v0.3)
 
 **Project:** [pallets/click](https://github.com/pallets/click), about 13k lines of source and 16k of tests. The project's own 2,262-test suite was the main grader. 2 runs per arm per task.

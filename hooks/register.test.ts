@@ -5,7 +5,7 @@ const SESSION_MODEL = 'claude-opus-5-5'
 const USAGE = { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
 // Stands for the engine: records which model and effort each step was sent with.
-function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: string; env?: Record<string, string>; usage?: typeof USAGE } = {}) {
+function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: string; toolError?: boolean; env?: Record<string, string>; usage?: typeof USAGE } = {}) {
   mock.store(on)
   mock.env(on, opts.env ?? {})
   on('command.register', () => ({ value: { command: 'route' } }))
@@ -25,7 +25,7 @@ function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: st
       usage: opts.usage === undefined ? null : { ...opts.usage, model: e.model },
     }
   })
-  on('tool.call', () => ({ result: {} }))
+  on('tool.call', () => ({ result: {}, ...(opts.toolError ? { isError: true } : {}) }) as any)
 }
 
 async function begin($: any) {
@@ -165,7 +165,30 @@ test('SMART_ROUTER=off leaves every turn on the session model', async ($, on) =>
   expect(sent).toEqual([SESSION_MODEL])
 })
 
-test('subagents keep the model their own definition or caller picks', async ($, on) => {
+test('subagents start on the cheapest model their task allows; judgement and explicit picks are kept', async ($, on) => {
+  engine(on, [])
+  const seen: (string | undefined)[] = []
+  on('agent.spawn', (_, e) => {
+    seen.push(e.model)
+    return { agentId: `a${seen.length}`, model: e.model ?? e.parentModel } as any
+  })
+  await begin($)
+
+  const spawn = (args: object) =>
+    $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'p', parentModel: SESSION_MODEL, ...args } as any)
+  await spawn({ subagentType: 'Explore', prompt: 'Find where config is loaded' })
+  await spawn({ subagentType: 'general-purpose', prompt: 'List every call to parse_args with file:line' })
+  await spawn({ subagentType: 'general-purpose', prompt: 'Fix the clamping bug in IntRange' })
+  await spawn({ subagentType: 'general-purpose', prompt: 'p' })
+  await spawn({ subagentType: 'Plan', prompt: 'Find the files to change' })
+  await spawn({ subagentType: 'general-purpose', prompt: 'List the files', model: 'opus' })
+  await spawn({ subagentType: 'general-purpose', prompt: 'List the files', model: 'claude-opus-5' })
+  await spawn({ subagentType: 'fork', prompt: 'List the files' })
+
+  expect(seen).toEqual(['haiku', 'sonnet', undefined, undefined, undefined, 'opus', 'opus', undefined])
+})
+
+test('subagent routing can be turned off', async ($, on) => {
   engine(on, [])
   const seen: (string | undefined)[] = []
   on('agent.spawn', (_, e) => {
@@ -173,13 +196,48 @@ test('subagents keep the model their own definition or caller picks', async ($, 
     return { agentId: 'a1', model: e.model ?? e.parentModel } as any
   })
   await begin($)
+  await $.command.run({ command: 'route', args: 'subagents off' } as any)
+  await $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'Find where config is loaded', subagentType: 'Explore', parentModel: SESSION_MODEL } as any)
+  expect(seen).toEqual([undefined])
+})
 
-  const spawn = (args: object) =>
-    $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'p', parentModel: SESSION_MODEL, ...args } as any)
-  await spawn({ subagentType: 'Explore' })
-  await spawn({ subagentType: 'general-purpose' })
+test('a cheap subagent runs its steps on its model, moves up after repeated tool errors, and is measured against the parent', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent, { toolError: true, usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+  on('agent.spawn', (_, e) => ({ agentId: 'sub1', model: e.model ?? e.parentModel }) as any)
+  await begin($)
+  await $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'Find where config is loaded', subagentType: 'Explore', parentModel: SESSION_MODEL } as any)
 
-  expect(seen).toEqual([undefined, undefined])
+  const subStep = async (index: number) => {
+    const stream = $.turn.step({ turnId: 'st', index, model: SESSION_MODEL, messageCount: 1, agentId: 'sub1' } as any)
+    for await (const _ of stream);
+  }
+  await subStep(0)
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'sub1' } as any)
+  await subStep(1)
+  await $.turn.complete({ turnId: 'st', agentId: 'sub1', answer: '' } as any)
+
+  expect(sent).toEqual(['haiku', 'sonnet'])
+  const status = await $.command.run({ command: 'route', args: '' } as any)
+  expect((status as any).text).toContain('handed up 1')
+  expect((status as any).text).toMatch(/Subagent spend \$0\.00\d* vs \$0\.01/)
+})
+
+test('delegation guidance is opt-in, and only where the session model can start subagents', async ($, on) => {
+  engine(on, [])
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'x', scope: 'shared' }] }) as any)
+  await begin($)
+  const off = (await $.prompt.compose({ model: SESSION_MODEL, promptModel: SESSION_MODEL, surfaces: [], tools: ['Agent'], outputStyle: null, traits: [] } as any)) as any
+  expect(off.sections.length).toBe(1)
+  await $.command.run({ command: 'route', args: 'delegate on' } as any)
+  const compose = (model: string, tools: string[]) =>
+    $.prompt.compose({ model, promptModel: model, surfaces: [], tools, outputStyle: null, traits: [] } as any)
+  const withAgent = (await compose(SESSION_MODEL, ['Read', 'Agent'])) as any
+  const noAgent = (await compose(SESSION_MODEL, ['Read'])) as any
+  const onHaiku = (await compose('claude-haiku-5-5', ['Agent'])) as any
+  expect(withAgent.sections.map((x: any) => x.id)).toEqual(['intro', 'smart-router:delegation'])
+  expect(noAgent.sections.length).toBe(1)
+  expect(onHaiku.sections.length).toBe(1)
 })
 
 test('running the tests to report on them starts on Haiku; asking for a fix does not', async ($, on) => {

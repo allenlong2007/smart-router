@@ -251,7 +251,24 @@ export function familyOf(model: string): Family {
   return m.includes('haiku') ? 'haiku' : m.includes('sonnet') ? 'sonnet' : 'opus'
 }
 
+// Exact prices by model id, where they differ from the family's current model
+// (older Opus and Fable bill more than Opus 5.5; Sonnet 5 reads cache dearer).
+const MODEL_PRICE: [RegExp, { input: number; output: number; read: number; write: number }][] = [
+  [/fable-5-2|mythos-5-2/, { input: 8e-6, output: 40e-6, read: 0.2e-6, write: 16e-6 }],
+  [/fable|mythos/, { input: 10e-6, output: 50e-6, read: 1e-6, write: 20e-6 }],
+  [/opus-5-5/, PRICE.opus],
+  [/opus-5|opus-4-[678]/, { input: 5e-6, output: 25e-6, read: 0.5e-6, write: 10e-6 }],
+  [/sonnet-5-5/, PRICE.sonnet],
+  [/sonnet-5|sonnet-4-6/, { input: 2e-6, output: 10e-6, read: 0.2e-6, write: 4e-6 }],
+]
+
+export function priceOf(model: string): { input: number; output: number; read: number; write: number } {
+  const m = model.toLowerCase()
+  for (const [re, p] of MODEL_PRICE) if (re.test(m)) return p
+  return PRICE[familyOf(m)]
+}
+
 export function stepCost(model: string, u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number {
-  const p = PRICE[familyOf(model)]
+  const p = priceOf(model)
   return u.input_tokens * p.input + u.output_tokens * p.output + u.cache_read_input_tokens * p.read + u.cache_creation_input_tokens * p.write
 }

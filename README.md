@@ -34,7 +34,23 @@ Also:
 
 - **Complaints:** if you say the last cheap answer was wrong ("that's wrong", "didn't work", "not what I asked", "try again"), the next two turns stay on your session model, and the mistake is recorded (see below).
 - **Effort:** the effort setting is never lowered. A cheaper model is asked to think exactly as hard as your session model would.
-- **Subagents** keep whatever model their own definition or the caller picks.
+- **Subagents** start on the cheapest model their job allows (see below).
+
+## Subagents
+
+When your session model starts a subagent on its own, the router picks that subagent's model:
+
+| Subagent | Runs on |
+| --- | --- |
+| Read-only search agents (`Explore`, docs lookups) | **Haiku** |
+| General-purpose agent with a scoped reading or decided mechanical job ("list every…", "rename X to Y in…") | **Sonnet** |
+| Anything that needs judgement: planning, review, debugging, design, fixing, refactoring, unclear briefs, forks | **your session model** |
+
+- A model the caller or the agent's own definition picks is kept. An older Opus (Opus 5, 4.8 and so on) is swapped for the current one, which is cheaper and better.
+- A cheap subagent moves up one model after repeated tool errors (3 on Haiku, 4 on Sonnet), when it runs long, or when a reply is cut off or refused.
+- Its spend is measured against what your session model would have paid. `/route` shows both.
+
+The router does **not** push your session model to split work by default. On the benchmark, a nudge to delegate added cost, and making delegation mandatory cost 10 to 70% more per task. Opus 5.5 still paid to brief the subagent and to check its answer, so the subagent's cost was extra on top. `/route delegate on` turns the nudge on if you want to try it.
 
 ## It learns from its mistakes
 
@@ -68,6 +84,7 @@ Routing state, such as which model holds which part of the conversation, is save
 - `/route safe` uses Haiku and your session model only. Sonnet is still where a Haiku turn moves first.
 - `/route off` turns routing off. Setting the `SMART_ROUTER=off` environment variable does the same for one process.
 - `/route classifier on|off` turns the Haiku triage of unclear prompts on or off.
+- `/route subagents on|off` turns subagent routing on or off. `/route delegate on|off` turns the delegation nudge on or off (off by default).
 - `/route learned` shows the learned record, `/route forget` clears it, and `/route learning on|off` turns learning on or off.
 - `/route reset` clears the stats. `/route` also shows the estimated spend against an all-session-model baseline.
 - Start a prompt with `!full`, `!sonnet` or `!light` to pick the starting model for that turn.
@@ -84,6 +101,8 @@ Earlier rounds, with Opus as the session model, over 67 graded runs (45 with the
 - **Hard tasks** (bug fixes, new features) stayed on Opus at the same cost.
 - **7-turn working sessions** cost 20% less on average: $0.32 against $0.40.
 - **Small lookups** cost about 99% less on Haiku.
+
+v0.4 (subagent routing): Haiku search subagents found every item in their lists (33/33 and 65/65) for about $0.005 each. Splitting work on purpose did not save money on single tasks (see BENCHMARK.md).
 
 See [BENCHMARK.md](BENCHMARK.md) for the method, every number, and the limits.
 

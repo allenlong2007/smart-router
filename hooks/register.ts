@@ -7,6 +7,7 @@ import {
   familyOf,
   NEXT_TIER,
   PRICE,
+  priceOf,
   rankOf,
   record,
   recordComplaint,
@@ -15,6 +16,7 @@ import {
   TIER_FAMILY,
 } from './learn'
 import type { Band, CacheView, Family, Learned, Tier } from './learn'
+import { DELEGATION_GUIDANCE, pickSubagent, SUBAGENT_LIMITS, SUBAGENT_MODEL } from './delegate'
 
 // Smart Router: each turn starts on the cheapest model that suits it (Haiku for
 // lookups and one-off commands, Sonnet for ordinary scoped edits, the session
@@ -37,6 +39,10 @@ type Settings = {
   useClassifier: boolean
   // Learn from outcomes; off, the router decides by its rules alone.
   useLearning: boolean
+  // Start subagents on a cheaper model when their task allows it.
+  routeSubagents: boolean
+  // Tell the session model it may hand self-contained parts to subagents.
+  delegate: boolean
 }
 
 type Stats = {
@@ -48,6 +54,12 @@ type Stats = {
   lightToFull: number
   classifierCalls: number
   classifierTokens: number
+  subLight: number
+  subMedium: number
+  subFull: number
+  subUp: number
+  subSpent: number
+  subBaseline: number
   // Estimated USD the turns cost, and what they would have cost on the session
   // model with its cache as it stood.
   spent: number
@@ -72,7 +84,7 @@ type Route = {
   startContext: number
 }
 
-const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true }
+const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true, routeSubagents: true, delegate: false }
 const NO_STATS: Stats = {
   light: 0,
   medium: 0,
@@ -82,6 +94,12 @@ const NO_STATS: Stats = {
   lightToFull: 0,
   classifierCalls: 0,
   classifierTokens: 0,
+  subLight: 0,
+  subMedium: 0,
+  subFull: 0,
+  subUp: 0,
+  subSpent: 0,
+  subBaseline: 0,
   spent: 0,
   baseline: 0,
 }
@@ -139,6 +157,10 @@ let pendingEcon: { key: string; tier: Tier; cost: number; baseline: number } | u
 // baseline a cheap step is measured against.
 let shadow: { tokens: number; at: number } | undefined
 const routes = new Map<string, Route>()
+// Subagents started below the session model: their rung, the parent's model,
+// how they are doing, and what they cost against the parent's price.
+type Sub = { tier: Tier; parentModel: string; toolErrors: number; steps: number; cost: number; baseline: number }
+const subs = new Map<string, Sub>()
 // Tokens of this conversation each model has cached, and when it last ran.
 const sessionCache: Record<Family, { tokens: number; at: number }> = {
   haiku: { tokens: 0, at: 0 },
@@ -357,6 +379,14 @@ async function decide($: EngineInterface, text: string): Promise<Decision> {
   return { tier, bucket: d.bucket, band: v.band, reason: c.reason === '' ? d.reason : `${d.reason}; ${c.reason}` }
 }
 
+// A cheap subagent that stumbles is handed up one rung, Sonnet then the
+// parent's model, for the rest of its run.
+function subUp($: EngineInterface, sub: Sub) {
+  sub.tier = sub.tier === 'light' ? 'medium' : 'full'
+  sub.toolErrors = 0
+  void bump($, { subUp: 1 })
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await loadSettings($)
@@ -366,8 +396,8 @@ export const register: Register = on => {
     } catch {}
     await $.command.register({
       name: 'route',
-      description: 'Smart Router: status | learned | balanced | safe | off | classifier on|off | learning on|off | forget | reset',
-      argumentHint: 'status | learned | balanced | safe | off | classifier on|off | learning on|off | forget | reset',
+      description: 'Smart Router: status | learned | balanced | safe | off | classifier|learning|subagents|delegate on|off | forget | reset',
+      argumentHint: 'status | learned | balanced | safe | off | classifier|learning|subagents|delegate on|off | forget | reset',
     })
     return next(e)
   })
@@ -381,6 +411,10 @@ export const register: Register = on => {
     if ((cmd === 'classifier' || cmd === 'learning') && (arg === 'on' || arg === 'off')) {
       await saveSettings($, cmd === 'classifier' ? { useClassifier: arg === 'on' } : { useLearning: arg === 'on' })
       return { text: `Smart Router ${cmd} ${arg}.` }
+    }
+    if ((cmd === 'subagents' || cmd === 'delegate') && (arg === 'on' || arg === 'off')) {
+      await saveSettings($, cmd === 'subagents' ? { routeSubagents: arg === 'on' } : { delegate: arg === 'on' })
+      return { text: `Smart Router ${cmd} ${arg}${cmd === 'delegate' ? ' (from the next session)' : ''}.` }
     }
     if (cmd === 'reset') {
       await $.store.set('stats', NO_STATS)
@@ -412,10 +446,38 @@ export const register: Register = on => {
         `Escalations — Haiku→Sonnet ${s.lightToMedium}, Haiku→session ${s.lightToFull}, Sonnet→session ${s.mediumToFull}`,
         `Estimated spend $${s.spent.toFixed(2)} vs $${s.baseline.toFixed(2)} all on the session model (${saved}% saved)`,
         `Triage calls: ${s.classifierCalls} (${s.classifierTokens} Haiku tokens)`,
+        `Subagents ${settings.routeSubagents ? 'routed' : 'not routed'}, delegation guidance ${settings.delegate ? 'on' : 'off'}: started on Haiku ${s.subLight}, Sonnet ${s.subMedium}, session model ${s.subFull}; handed up ${s.subUp}`,
+        `Subagent spend $${s.subSpent.toFixed(2)} vs $${s.subBaseline.toFixed(2)} on the session model (${s.subBaseline > 0 ? Math.round(100 * (1 - s.subSpent / s.subBaseline)) : 0}% saved)`,
         'Prefix a prompt with !full, !sonnet or !light to pick the starting tier. /route learned shows what it learned.',
       ].join('\n'),
     }
   })
+
+  // A subagent starts with an empty context, so a cheaper model costs it no
+  // cache: self-contained reading or a decided change runs on Haiku or Sonnet,
+  // judgement stays on the session model.
+  on('agent.spawn', async ($, e, next) => {
+    if (isDisabledByEnv || settings.mode === 'off' || !settings.routeSubagents || e.resume !== undefined) return next(e)
+    const c = pickSubagent(e)
+    const tier = settings.mode === 'safe' && c.tier === 'medium' ? 'full' : c.tier
+    const res = await next(c.model === undefined || tier !== c.tier ? e : { ...e, model: c.model })
+    const id = (res as { agentId?: string }).agentId
+    await bump($, tier === 'light' ? { subLight: 1 } : tier === 'medium' ? { subMedium: 1 } : { subFull: 1 })
+    if (id !== undefined && tier !== 'full')
+      subs.set(id, { tier, parentModel: e.parentModel, toolErrors: 0, steps: 0, cost: 0, baseline: 0 })
+    if (subs.size > 100) subs.delete(subs.keys().next().value as string)
+    return res
+  }).catch(($, e, next) => next(e))
+
+  // Opt-in (`/route delegate on`): tell the main loop it may split a task.
+  // Off by default: on the benchmark the nudge added cost and pushing harder
+  // made Opus 5.5 pay for briefing and re-checking on top of the subagent.
+  on('prompt.compose', async ($, e, next) => {
+    const res = await next(e)
+    if (isDisabledByEnv || settings.mode === 'off' || !settings.delegate || !settings.routeSubagents) return res
+    if (!e.tools.includes('Agent') || !/opus/i.test(e.model)) return res
+    return { sections: [...res.sections, { id: 'smart-router:delegation', text: DELEGATION_GUIDANCE, scope: 'session' as const }] }
+  }).catch(($, e, next) => next(e))
 
   // `!full …` / `!sonnet …` / `!light …` pick the tier for the turn this prompt starts.
   on('prompt.submit', ($, e, next) => {
@@ -457,7 +519,21 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId !== undefined) return yield* next(e)
+    if (e.agentId !== undefined) {
+      const sub = subs.get(e.agentId)
+      if (sub === undefined) return yield* next(e)
+      sub.steps += 1
+      if (sub.tier !== 'full' && sub.steps > SUBAGENT_LIMITS[sub.tier].steps) subUp($, sub)
+      const model = sub.tier === 'full' ? sub.parentModel : SUBAGENT_MODEL[sub.tier]
+      const res = yield* next(model === e.model ? e : { ...e, model })
+      if (res.usage !== null) {
+        const u = res.usage
+        sub.cost += stepCost(u.model || model, u)
+        sub.baseline += stepCost(sub.parentModel, u)
+      }
+      if (sub.tier !== 'full' && (res.stopReason === 'max_tokens' || res.stopReason === 'refusal')) subUp($, sub)
+      return res
+    }
     sessionModel = e.model
     const route = routes.get(e.turnId)
     if (route !== undefined) route.step = e.index
@@ -509,7 +585,13 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) {
+      const sub = subs.get(e.agentId)
+      const ran = await next(e)
+      if (sub !== undefined && sub.tier !== 'full' && ran.deny === undefined && ran.isError === true)
+        if (++sub.toolErrors >= SUBAGENT_LIMITS[sub.tier].toolErrors) subUp($, sub)
+      return ran
+    }
     const route = current
     if (route === undefined || route.tier === 'full') return next(e)
     const step = route.step + 1
@@ -534,6 +616,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    const sub = e.agentId === undefined ? undefined : subs.get(e.agentId)
+    if (sub !== undefined && e.agentId !== undefined) {
+      await bump($, { subSpent: sub.cost, subBaseline: sub.baseline })
+      subs.delete(e.agentId)
+    }
     if (e.agentId === undefined) {
       const route = routes.get(e.turnId)
       if (route !== undefined) {
