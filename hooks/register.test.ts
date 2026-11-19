@@ -339,3 +339,16 @@ test('prompts that load whole files stay on the session model; ordinary lookups 
   expect(readsALot('Read a.py and tell me what it does')).toBe(false)
   expect(readsALot('List every place where os.environ is read')).toBe(false)
 })
+
+test('a failure after the subagent starts never starts it twice', async ($, on) => {
+  engine(on, [])
+  let spawns = 0
+  on('agent.spawn', (_, e) => {
+    spawns += 1
+    // a result the router cannot read: its bookkeeping throws after the spawn
+    return Object.defineProperty({ model: e.model ?? e.parentModel }, 'agentId', { get() { throw new Error('bad result') }, enumerable: true }) as any
+  })
+  await begin($)
+  await $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'Find where config is loaded', subagentType: 'Explore', parentModel: SESSION_MODEL } as any).catch(() => {})
+  expect(spawns).toBe(1)
+})

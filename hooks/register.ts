@@ -469,18 +469,32 @@ export const register: Register = on => {
   // A subagent starts with an empty context, so a cheaper model costs it no
   // cache: self-contained reading or a decided change runs on Haiku or Sonnet,
   // judgement stays on the session model.
+  // `next` runs exactly once: a failure in the router's own bookkeeping must
+  // never start the subagent a second time.
   on('agent.spawn', async ($, e, next) => {
-    if (isDisabledByEnv || settings.mode === 'off' || !settings.routeSubagents || e.resume !== undefined) return next(e)
-    const c = pickSubagent(e)
-    const tier = settings.mode === 'safe' && c.tier === 'medium' ? 'full' : c.tier
-    const res = await next(c.model === undefined || tier !== c.tier ? e : { ...e, model: c.model })
-    const id = (res as { agentId?: string }).agentId
-    await bump($, tier === 'light' ? { subLight: 1 } : tier === 'medium' ? { subMedium: 1 } : { subFull: 1 })
-    if (id !== undefined && tier !== 'full')
-      subs.set(id, { tier, parentModel: e.parentModel, toolErrors: 0, steps: 0, cost: 0, baseline: 0 })
-    if (subs.size > 100) subs.delete(subs.keys().next().value as string)
+    let pick: { tier: Tier; model?: string } | undefined
+    try {
+      if (!(isDisabledByEnv || settings.mode === 'off' || !settings.routeSubagents || e.resume !== undefined)) {
+        const c = pickSubagent(e)
+        const tier = settings.mode === 'safe' && c.tier === 'medium' ? 'full' : c.tier
+        pick = { tier, model: tier === c.tier ? c.model : undefined }
+      }
+    } catch {
+      pick = undefined
+    }
+    const res = await next(pick?.model === undefined ? e : { ...e, model: pick.model })
+    if (pick === undefined) return res
+    try {
+      const id = (res as { agentId?: string }).agentId
+      await bump($, pick.tier === 'light' ? { subLight: 1 } : pick.tier === 'medium' ? { subMedium: 1 } : { subFull: 1 })
+      if (id !== undefined && pick.tier !== 'full')
+        subs.set(id, { tier: pick.tier, parentModel: e.parentModel, toolErrors: 0, steps: 0, cost: 0, baseline: 0 })
+      if (subs.size > 100) subs.delete(subs.keys().next().value as string)
+    } catch {
+      // stats only; the subagent is already running
+    }
     return res
-  }).catch(($, e, next) => next(e))
+  })
 
   // Opt-in (`/route delegate on`): tell the main loop it may split a task.
   // Off by default: on the benchmark the nudge added cost and pushing harder
