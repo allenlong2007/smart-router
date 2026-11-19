@@ -1,4 +1,4 @@
-import { effortFor, isReadOnlySearch, readsALot } from './register'
+import { effortFor, isDiskWideSearch, isReadOnlySearch, isScopedWork, readsALot } from './register'
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -388,4 +388,38 @@ test('the default effort setting runs hard Opus turns at low too, and never goes
   await $.turn.start({ text: 'Add a docstring to parse_args', turnId: 't2' })
   await step($, 't2', 0, 'high')
   expect(sent).toEqual([`${SESSION_MODEL}@low`, 'sonnet@medium'])
+})
+
+test('scoped bug fixes and additions start on Sonnet; deep or open-ended work does not', () => {
+  expect(isScopedWork('Users report that -n5 fails. Find and fix the bug, add a regression test, and run the tests.')).toBe(true)
+  expect(isScopedWork('Add a click.Duration parameter type that converts a string to a timedelta')).toBe(true)
+  expect(isScopedWork('Write unit tests for make_str')).toBe(true)
+  expect(isScopedWork('Refactor the parser and fix the bug')).toBe(false)
+  expect(isScopedWork('Investigate why the server deadlocks and fix it')).toBe(false)
+  expect(isScopedWork('Fix every failing test across the repo')).toBe(false)
+  expect(isScopedWork('Design a plugin system')).toBe(false)
+})
+
+test('disk-wide searches are spotted; searches inside the project are not', () => {
+  expect(isDiskWideSearch('pwd; ls -la; find / -type d -path "*src/click" 2>/dev/null | head')).toBe(true)
+  expect(isDiskWideSearch('find ~ -name "*.py"')).toBe(true)
+  expect(isDiskWideSearch('grep -rn foo /')).toBe(true)
+  expect(isDiskWideSearch('find src/click -type f | sort')).toBe(false)
+  expect(isDiskWideSearch('grep -rn "echo(" src/click')).toBe(false)
+  expect(isDiskWideSearch('find . -name "*.py"')).toBe(false)
+  expect(isScopedWork('Add a click.Duration parameter type. Anything else fails with a usage error.')).toBe(true)
+})
+
+test('a cheap turn is sent back to the project instead of scanning the disk; the session model is not stopped', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent)
+  await begin($)
+  await $.turn.start({ text: 'what does git status show?', turnId: 't1' })
+  await step($, 't1')
+  const r = (await $.tool.call({ tool: 'Bash', command: 'find / -name x' } as any)) as any
+  expect(String(r.deny)).toContain('whole disk')
+  await $.turn.start({ text: 'refactor the auth module to use sessions', turnId: 't2' })
+  await step($, 't2')
+  const r2 = (await $.tool.call({ tool: 'Bash', command: 'find / -name x' } as any)) as any
+  expect(r2.deny).toBeUndefined()
 })

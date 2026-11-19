@@ -46,6 +46,8 @@ type Settings = {
   // low (default): Opus and Haiku steps at low effort, Sonnet at medium; lower: the
   // same but hard work keeps the session's effort; session: effort left alone.
   effort: 'lower' | 'low' | 'session'
+  // Start scoped bug fixes and additions on Sonnet.
+  scopedToSonnet: boolean
 }
 
 type Stats = {
@@ -87,7 +89,7 @@ type Route = {
   startContext: number
 }
 
-const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true, routeSubagents: true, delegate: false, effort: 'low' }
+const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true, routeSubagents: true, delegate: false, effort: 'low', scopedToSonnet: true }
 const NO_STATS: Stats = {
   light: 0,
   medium: 0,
@@ -154,6 +156,24 @@ const JUDGEMENT =
 
 export function isReadOnlySearch(t: string): boolean {
   return LISTING.test(t.trim()) && !JUDGEMENT.test(t) && (READ_ONLY.test(t) || !STANDARD.test(t))
+}
+
+// A scoped fix or addition: a reported bug to find and fix, a new type or
+// option to add, tests to write. Sonnet at medium effort matched Opus on these
+// in the benchmark at about half the cost. Open-ended or deep work stays put.
+const SCOPED_WORK = /\b(fix(es|ed|ing)?|bug|regression test|add (a |an )?([\w.`]+ ){0,3}(parameter type|type|option|flag|argument|command|helper|function|method)|(write|add) (unit )?tests?)\b/i
+const DEEP_WORK =
+  /\b(design|architect|refactor|restructur|rewrite|migrat|secur|vulnerab|concurren|race condition|deadlock|thread|async|performance|optimi[sz]|plan|review|audit|root cause|investigat|across|entire|whole|every|all (the )?files|why|explain|whatever|failing tests|mods?|plugin|schema|database|deploy)\w*/i
+
+export function isScopedWork(t: string): boolean {
+  return SCOPED_WORK.test(t) && !DEEP_WORK.test(t) && t.length <= 1200
+}
+
+// `find /`, `find ~`, `grep -r … /`: a scan from the root or home folder.
+const DISK_WIDE = /\b(find|fd|locate|mdfind)\s+(-\w+\s+)*(\/|~|\$HOME|\/Users|\/System|\/private|\/Volumes)(\s|$)|\bgrep\s+-\w*r\w*\s+.*\s(\/|~)(\s|$)|\bmdfind\b/
+
+export function isDiskWideSearch(cmd: string): boolean {
+  return DISK_WIDE.test(cmd)
 }
 
 // Run a check and say what it printed; asking for a fix is not this.
@@ -281,6 +301,8 @@ function heuristic(text: string): Decision | undefined {
   if (t === '') return { tier: 'full', bucket: 'continuation', reason: 'continuation' }
   if (CONFIRM.test(t)) return { tier: lastTier, bucket: lastBucket, reason: 'confirmation, same tier as before' }
   if (THANKS.test(t)) return { tier: 'light', bucket: 'ack', reason: 'acknowledgement' }
+  if (!t.includes('```') && settings.scopedToSonnet && isScopedWork(t))
+    return { tier: 'medium', bucket: 'work:scoped', reason: 'scoped fix or addition' }
   if (t.includes('```') || t.length > 500 || t.split('\n').length > 4)
     return { tier: 'full', bucket: 'long', reason: 'long or code-bearing prompt' }
   // The session model would pay to cache-write it all on its next turn.
@@ -456,6 +478,10 @@ export const register: Register = on => {
     if ((cmd === 'classifier' || cmd === 'learning') && (arg === 'on' || arg === 'off')) {
       await saveSettings($, cmd === 'classifier' ? { useClassifier: arg === 'on' } : { useLearning: arg === 'on' })
       return { text: `Smart Router ${cmd} ${arg}.` }
+    }
+    if (cmd === 'scoped' && (arg === 'on' || arg === 'off')) {
+      await saveSettings($, { scopedToSonnet: arg === 'on' })
+      return { text: `Smart Router scoped fixes on Sonnet ${arg}.` }
     }
     if (cmd === 'effort' && (arg === 'lower' || arg === 'low' || arg === 'session')) {
       await saveSettings($, { effort: arg })
@@ -648,6 +674,17 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // A cheap model that loses its bearings tends to search the whole disk,
+    // which took two minutes in the benchmark. Send it back to the project.
+    if (e.tool === 'Bash' && isDiskWideSearch(String((e as { command?: string }).command ?? ''))) {
+      const tier = e.agentId !== undefined ? subs.get(e.agentId)?.tier : current?.tier
+      if (tier !== undefined && tier !== 'full')
+        return {
+          deny:
+            'smart-router: searching the whole disk is slow. The project is the current working directory: ' +
+            'run `pwd`, then search inside it (for example `grep -rn PATTERN src`).',
+        }
+    }
     if (e.agentId !== undefined) {
       const sub = subs.get(e.agentId)
       const ran = await next(e)

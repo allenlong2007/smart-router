@@ -28,6 +28,24 @@ So a token on Sonnet weighs half an Opus token, and a token on Haiku weighs one 
 
 Raw tokens rose about 5% on the small suite, and fell 11% on the mid project and 19% on click. In the long sessions, cheaper turns left a smaller context for later Opus turns to re-read.
 
+## Scoped fixes on Sonnet (v0.7)
+
+v0.7 starts scoped bug fixes and additions on Sonnet at medium effort (Sonnet at medium was 16/16 in the effort test, about half the cost of Opus at low, and the fastest). Three harder tasks were added: a short-option bug click's own suite does not catch (`-n5` fails, `-n 5` works), a nargs ordering bug, and a `Duration` type with hidden checks. 2 runs each.
+
+| Arm | 10 original tasks | 3 harder tasks | Total cost | 8-turn sessions |
+|---|---|---|---|---|
+| Opus 5.5 alone (medium) | 20/20 $5.58 | 6/6 $1.88 | $7.46 | 16/16 $2.55 |
+| Opus 5.5 alone (low) | | 6/6 $1.47 | | 16/16 $1.97 |
+| Sonnet 5.5 alone (medium) | | 6/6 $0.89 | | |
+| v0.6 | 20/20 $4.20 | 6/6 $1.52 | $5.72 | 16/16 $2.00 |
+| **v0.7** | **20/20 $4.05** | **6/6 $1.10** | **$5.15** | **16/16 $2.01** |
+
+- Both hidden bugs went to Sonnet and were fixed 4/4 at about half v0.6's cost. Sonnet alone solved all three harder tasks.
+- In long sessions every turn still ran on Opus: switching a large context to Sonnet costs more than it saves.
+- **Speed fix:** in two v0.7 search runs Haiku mangled the folder path and ran `find /` for about 2 minutes. v0.7 now denies disk-wide scans on cheap turns and points the model back to the project. A re-run of 18 tasks (3 runs each) had no wandering; search turns took 11 to 31 seconds of model time.
+- In that re-run one Haiku search listed the right lines as `:479` under a file heading instead of `utils.py:479`, which the grader did not count.
+- Limits: 2 to 3 runs per arm, one codebase.
+
 ## Lower effort and Haiku searches (v0.6)
 
 v0.6 runs Opus and Haiku steps at low effort (Sonnet at medium) and sends read-only searches to Haiku. Two variants were tested: **a** lowers effort on every turn, **b** keeps the session's effort for hard work. Same click tasks and graders, 2 runs each. "Opus alone" runs at Claude Code's default effort, medium.

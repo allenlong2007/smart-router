@@ -36,6 +36,8 @@ Also:
 
 - **Complaints:** if you say the last cheap answer was wrong ("that's wrong", "didn't work", "not what I asked", "try again"), the next two turns stay on your session model, and the mistake is recorded (see below).
 - **Effort:** steps run at low effort on Opus and Haiku, and at medium on Sonnet (Sonnet missed work at low). Effort is only ever lowered, never raised. In the benchmark, low effort matched medium and high on every task and was faster. `/route effort lower` keeps your own effort for hard work (debugging, features, design); `/route effort session` leaves effort alone.
+- **Scoped fixes on Sonnet:** fixing a reported bug, adding a type, option or function, or writing tests starts on Sonnet at medium effort. Refactors, design, security, "investigate why", "fix whatever fails" and anything across the whole codebase stay on your session model. `/route scoped off` turns this off.
+- **No disk-wide scans:** a cheap model that tries `find /` or similar is sent back to the project folder (in the benchmark, a lost Haiku search spent 2 minutes scanning the disk).
 - **Searches:** read-only searches ("list every…", "find all…", "do not change any files") start on Haiku, even when they say "every" or "across".
 - **Subagents** start on the cheapest model their job allows (see below).
 
@@ -108,6 +110,8 @@ Earlier rounds, with Opus as the session model, over 67 graded runs (45 with the
 v0.4 (subagent routing): Haiku search subagents found every item in their lists (33/33 and 65/65) for about $0.005 each. Splitting work on purpose did not save money on single tasks (see BENCHMARK.md).
 
 v0.5: in 8-turn sessions that start by reading 4,500 lines, every version got every turn right. v0.5 averaged $2.40 against $2.55 on Opus alone. It fixes a v0.4 trap where a whole-file read went to Sonnet and Opus then paid twice as much to take over. Higher effort settings cost 10 to 25% more and gained no accuracy on any model.
+
+**v0.7:** 13 tasks including two hidden bugs and a new feature, every answer correct: $5.15 against $7.46 on Opus alone (31% less) and $5.72 on v0.6 (10% less). The hard bug fixes cost half as much on Sonnet. Long sessions cost the same as v0.6 ($2.01), 21% under Opus alone.
 
 **v0.6:** against Opus 5.5 alone at its default (medium) effort, with every answer still correct: 25% cheaper on 10 single tasks ($4.20 vs $5.58) and 22% cheaper on 8-turn sessions ($2.00 vs $2.55), and faster on both. Against v0.3: 16% and 11% cheaper.
 
