@@ -1,4 +1,5 @@
 {
+  "enabledPlugins": {},
   "extraKnownMarketplaces": {
     "smart-router": {
       "source": {
@@ -6,8 +7,5 @@
         "repo": "allenlong2007/smart-router"
       }
     }
-  },
-  "enabledPlugins": {
-    "smart-router@smart-router": true
   }
 }
