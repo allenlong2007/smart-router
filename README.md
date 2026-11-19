@@ -35,7 +35,8 @@ A Haiku turn moves to the session model instead of Sonnet when Sonnet's cold cac
 Also:
 
 - **Complaints:** if you say the last cheap answer was wrong ("that's wrong", "didn't work", "not what I asked", "try again"), the next two turns stay on your session model, and the mistake is recorded (see below).
-- **Effort:** the effort setting is never lowered. A cheaper model is asked to think exactly as hard as your session model would.
+- **Effort:** steps run at low effort on Opus and Haiku, and at medium on Sonnet (Sonnet missed work at low). Effort is only ever lowered, never raised. In the benchmark, low effort matched medium and high on every task and was faster. `/route effort lower` keeps your own effort for hard work (debugging, features, design); `/route effort session` leaves effort alone.
+- **Searches:** read-only searches ("list every…", "find all…", "do not change any files") start on Haiku, even when they say "every" or "across".
 - **Subagents** start on the cheapest model their job allows (see below).
 
 ## Subagents
@@ -107,6 +108,8 @@ Earlier rounds, with Opus as the session model, over 67 graded runs (45 with the
 v0.4 (subagent routing): Haiku search subagents found every item in their lists (33/33 and 65/65) for about $0.005 each. Splitting work on purpose did not save money on single tasks (see BENCHMARK.md).
 
 v0.5: in 8-turn sessions that start by reading 4,500 lines, every version got every turn right. v0.5 averaged $2.40 against $2.55 on Opus alone. It fixes a v0.4 trap where a whole-file read went to Sonnet and Opus then paid twice as much to take over. Higher effort settings cost 10 to 25% more and gained no accuracy on any model.
+
+**v0.6:** against Opus 5.5 alone at its default (medium) effort, with every answer still correct: 25% cheaper on 10 single tasks ($4.20 vs $5.58) and 22% cheaper on 8-turn sessions ($2.00 vs $2.55), and faster on both. Against v0.3: 16% and 11% cheaper.
 
 See [BENCHMARK.md](BENCHMARK.md) for the method, every number, and the limits.
 

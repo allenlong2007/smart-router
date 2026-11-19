@@ -1,4 +1,4 @@
-import { readsALot } from './register'
+import { effortFor, isReadOnlySearch, readsALot } from './register'
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -29,8 +29,10 @@ function engine(on: On, sent: string[], opts: { triage?: string; stopReason?: st
   on('tool.call', () => ({ result: {}, ...(opts.toolError ? { isError: true } : {}) }) as any)
 }
 
-async function begin($: any) {
+// Older tests check models alone: they run with effort left untouched.
+async function begin($: any, effort = 'session') {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'route', args: `effort ${effort}` })
 }
 
 async function step($: any, turnId: string, index = 0, effort?: string) {
@@ -351,4 +353,39 @@ test('a failure after the subagent starts never starts it twice', async ($, on) 
   await begin($)
   await $.agent.spawn({ tool_use_id: 'x', description: 'd', prompt: 'Find where config is loaded', subagentType: 'Explore', parentModel: SESSION_MODEL } as any).catch(() => {})
   expect(spawns).toBe(1)
+})
+
+test('effort is lowered where the benchmark showed no loss: Haiku and easy Opus turns to low, Sonnet to medium, hard work kept', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent, { triage: 'complex' })
+  await begin($, 'lower')
+  const turn = async (id: string, text: string, effort: string) => {
+    await $.turn.start({ text, turnId: id })
+    await step($, id, 0, effort)
+  }
+  await turn('t1', 'List every place where os.environ is read. Do not change any files.', 'high')
+  await turn('t2', 'Add a docstring to parse_args', 'high')
+  await turn('t3', 'Debug why the clamp returns the wrong value and fix it', 'high')
+  await turn('t4', 'Read core.py and types.py in full and give me an overview', 'medium')
+  await turn('t5', 'Add a docstring to parse_args', 'low')
+  expect(sent).toEqual(['haiku@low', 'sonnet@medium', `${SESSION_MODEL}@high`, `${SESSION_MODEL}@low`, 'sonnet@low'])
+})
+
+test('read-only searches go to Haiku even when they say every; judgement and edits do not', () => {
+  expect(isReadOnlySearch('List every call to echo( inside src/click, as file.py:line. Do not change any files.')).toBe(true)
+  expect(isReadOnlySearch('Find all places that read os.environ')).toBe(true)
+  expect(isReadOnlySearch('List every bug in the parser')).toBe(false)
+  expect(isReadOnlySearch('Explain how parameters are ordered. Do not change any files.')).toBe(false)
+  expect(isReadOnlySearch('Find the typo and update the docstring')).toBe(false)
+})
+
+test('the default effort setting runs hard Opus turns at low too, and never goes below medium on Sonnet', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent, { triage: 'complex' })
+  await begin($, 'low')
+  await $.turn.start({ text: 'Debug why the clamp returns the wrong value and fix it', turnId: 't1' })
+  await step($, 't1', 0, 'medium')
+  await $.turn.start({ text: 'Add a docstring to parse_args', turnId: 't2' })
+  await step($, 't2', 0, 'high')
+  expect(sent).toEqual([`${SESSION_MODEL}@low`, 'sonnet@medium'])
 })

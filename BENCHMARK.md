@@ -28,6 +28,24 @@ So a token on Sonnet weighs half an Opus token, and a token on Haiku weighs one 
 
 Raw tokens rose about 5% on the small suite, and fell 11% on the mid project and 19% on click. In the long sessions, cheaper turns left a smaller context for later Opus turns to re-read.
 
+## Lower effort and Haiku searches (v0.6)
+
+v0.6 runs Opus and Haiku steps at low effort (Sonnet at medium) and sends read-only searches to Haiku. Two variants were tested: **a** lowers effort on every turn, **b** keeps the session's effort for hard work. Same click tasks and graders, 2 runs each. "Opus alone" runs at Claude Code's default effort, medium.
+
+| Arm | 10 single tasks | Cost | Time | 8-turn sessions | Cost per session | Time per session |
+|---|---|---|---|---|---|---|
+| Opus 5.5 alone (medium) | 20/20 | $5.58 | 8.8 min | 16/16 | $2.55 | 3.9 min |
+| Opus 5.5 alone (low) | 20/20 | $4.80 | 6.6 min | 16/16 | $1.97 | 2.6 min |
+| v0.3 | 20/20 | $5.01 | 8.2 min | 16/16 | $2.25 | 3.4 min |
+| **v0.6a (shipped)** | **20/20** | **$4.20** | 7.1 min | **16/16** | **$2.00** | 2.7 min |
+| v0.6b | 19/20 | $4.52 | 11.5 min | 16/16 | $2.04 | 2.7 min |
+
+- v0.6a is 25% cheaper than Opus alone on single tasks and 22% cheaper on sessions, and faster on both. Against v0.3 it is 16% and 11% cheaper.
+- Most of the saving is effort: Opus at low alone gets close on sessions. On single tasks v0.6a beats Opus-low by another 12%, from Haiku searches and Sonnet edits.
+- In the long sessions every turn still ran on Opus: with a large context, the cost estimate kept searches there.
+- v0.6b's miss: a Haiku search started a disk-wide background search, ran for about 4 minutes, and ended on a follow-up message. That is the risk of Haiku searches: occasional wandering. It happened in 1 of 8 Haiku search runs.
+- Limits: 2 runs per arm, one codebase, Claude Code `-p` runs.
+
 ## Long sessions and effort levels (v0.5)
 
 ### Long sessions

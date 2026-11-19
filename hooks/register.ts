@@ -43,6 +43,9 @@ type Settings = {
   routeSubagents: boolean
   // Tell the session model it may hand self-contained parts to subagents.
   delegate: boolean
+  // low (default): Opus and Haiku steps at low effort, Sonnet at medium; lower: the
+  // same but hard work keeps the session's effort; session: effort left alone.
+  effort: 'lower' | 'low' | 'session'
 }
 
 type Stats = {
@@ -84,7 +87,7 @@ type Route = {
   startContext: number
 }
 
-const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true, routeSubagents: true, delegate: false }
+const DEFAULTS: Settings = { mode: 'balanced', useClassifier: true, useLearning: true, routeSubagents: true, delegate: false, effort: 'low' }
 const NO_STATS: Stats = {
   light: 0,
   medium: 0,
@@ -139,6 +142,18 @@ const FILE_TOKEN = /\b[\w./-]+\.(py|ts|tsx|js|jsx|swift|go|rs|java|kt|rb|c|cc|cp
 export function readsALot(t: string): boolean {
   if (BIG_READ.test(t)) return true
   return READ_VERB.test(t) && (t.match(FILE_TOKEN)?.length ?? 0) >= 3
+}
+
+// A read-only search or listing ("list every…", "find all…", "do not change any
+// files"). Haiku matched Opus on these in the benchmark at about the same speed;
+// words like "every" or "across" no longer push them to the session model.
+const READ_ONLY = /\b(do not|don'?t|without) (change|chang|modify|edit|touch)\w* (any|the)? ?(files?|code)\b/i
+const LISTING = /^(please )?(list|find|locate|enumerate|count|show( me)?|give me (a list|every|all|the (file|line))|where|which)\b/i
+const JUDGEMENT =
+  /\b(implement|refactor|architect|design|debug|investigat|diagnos|root cause|migrat|optimi[sz]|secur|vulnerab|race|concurren|deadlock|prove|plan|review|audit|why|wrong|fail|broken|bug|crash|error|exception|regression|fix|explain|how does|survey|longer than|compare|recommend|should)\w*/i
+
+export function isReadOnlySearch(t: string): boolean {
+  return LISTING.test(t.trim()) && !JUDGEMENT.test(t) && (READ_ONLY.test(t) || !STANDARD.test(t))
 }
 
 // Run a check and say what it printed; asking for a fix is not this.
@@ -231,6 +246,22 @@ function modelFor(tier: Tier, current: string): string | undefined {
   return target !== undefined && rankOf(familyOf(target)) < rankOf(familyOf(current)) ? target : undefined
 }
 
+const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+// Turns that keep the session's effort under 'lower': hard or unclear work.
+const KEEP_EFFORT = /^(complex|long|triage:complex|complaint|continuation|unclassified|forced|off)$/
+
+// The effort a step runs at: only ever lowered. Benchmark: Opus and Haiku at
+// low matched medium and high on every task; Sonnet at low missed a feature
+// twice, so Sonnet never goes below medium.
+export function effortFor(route: { tier: Tier; bucket: string }, model: string, current: unknown): string | undefined {
+  if (settings.effort === 'session') return undefined
+  if (settings.effort === 'lower' && route.tier === 'full' && KEEP_EFFORT.test(route.bucket)) return undefined
+  const floor = familyOf(model) === 'sonnet' ? 'medium' : 'low'
+  const at = typeof current === 'string' ? LEVELS.indexOf(current) : current === undefined ? LEVELS.indexOf('medium') : -1
+  if (at < 0 || at <= LEVELS.indexOf(floor)) return undefined
+  return floor
+}
+
 function fullFamily(): Family {
   return familyOf(sessionModel ?? 'opus')
 }
@@ -254,6 +285,7 @@ function heuristic(text: string): Decision | undefined {
     return { tier: 'full', bucket: 'long', reason: 'long or code-bearing prompt' }
   // The session model would pay to cache-write it all on its next turn.
   if (readsALot(t)) return { tier: 'full', bucket: 'big-read', reason: 'loads whole files into the conversation' }
+  if (t.length <= 400 && isReadOnlySearch(t)) return { tier: 'light', bucket: 'lookup:search', reason: 'read-only search' }
   if (t.length <= 200 && RUN_AND_REPORT.test(t)) return { tier: 'light', bucket: 'run-report', reason: 'run and report' }
   if (COMPLEX.test(t)) return { tier: 'full', bucket: 'complex', reason: 'complex task keywords' }
   if (t.length <= 300 && STANDARD.test(t))
@@ -425,6 +457,10 @@ export const register: Register = on => {
       await saveSettings($, cmd === 'classifier' ? { useClassifier: arg === 'on' } : { useLearning: arg === 'on' })
       return { text: `Smart Router ${cmd} ${arg}.` }
     }
+    if (cmd === 'effort' && (arg === 'lower' || arg === 'low' || arg === 'session')) {
+      await saveSettings($, { effort: arg })
+      return { text: `Smart Router effort ${arg}.` }
+    }
     if ((cmd === 'subagents' || cmd === 'delegate') && (arg === 'on' || arg === 'off')) {
       await saveSettings($, cmd === 'subagents' ? { routeSubagents: arg === 'on' } : { delegate: arg === 'on' })
       return { text: `Smart Router ${cmd} ${arg}${cmd === 'delegate' ? ' (from the next session)' : ''}.` }
@@ -567,8 +603,8 @@ export const register: Register = on => {
     if (route !== undefined && route.tier !== 'full' && e.index - route.tierStartStep >= LIMITS[route.tier].steps)
       await escalate($, route, `over ${LIMITS[route.tier].steps} steps`, e.index)
     const model = route === undefined ? undefined : modelFor(route.tier, e.model)
-    // Effort is passed on untouched: a cheaper model thinks as hard as asked.
-    const res = yield* next(model === undefined ? e : { ...e, model })
+    const effort = route === undefined ? undefined : effortFor(route, model ?? e.model, e.effort)
+    const res = yield* next(model === undefined && effort === undefined ? e : { ...e, ...(model ? { model } : {}), ...(effort ? { effort } : {}) })
     if (res.usage !== null) {
       const u = res.usage
       const context = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
