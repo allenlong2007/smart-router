@@ -28,6 +28,46 @@ So a token on Sonnet weighs half an Opus token, and a token on Haiku weighs one 
 
 Raw tokens rose about 5% on the small suite, and fell 11% on the mid project and 19% on click. In the long sessions, cheaper turns left a smaller context for later Opus turns to re-read.
 
+## Long sessions and effort levels (v0.5)
+
+### Long sessions
+
+One conversation of 8 turns on click, resumed turn by turn. Turn 1 reads `core.py` and `types.py` in full (about 4,500 lines, 60k tokens), so every later turn carries a large context. Then: list env var reads, fix a planted clamp bug, list `echo` calls, locate all 65 exports, add 34 docstrings, survey modules, "thanks". Each turn is graded.
+
+| Arm | Runs | Correct turns | Avg session cost |
+|---|---|---|---|
+| Opus 5.5 alone | 2 | 16/16 | $2.55 |
+| v0.3 | 2 | 16/16 | $2.25 |
+| v0.4 | 2 | 16/16 | $2.79 |
+| v0.4 + delegation note | 2 | 16/16 | $2.57 |
+| v0.4 forced delegation | 2 | 16/16 | $2.37 |
+| **v0.5** | 4 | 32/32 | **$2.40** |
+
+- Even with a large context and delegation made mandatory, Opus never started a subagent.
+- In 3 of 6 v0.4 runs, turn 1 was triaged "standard" and ran on Sonnet. It saved about $0.30 there, then Opus paid about $0.65 on turn 2 to cache-write the 60k tokens Sonnet had read. v0.5 keeps prompts that load whole files on the session model; turn 2 cost about $0.17 in all 4 runs.
+- In this kind of session nearly every turn is real work, so the router mostly stays on Opus and saves little. The differences between v0.3, v0.5 and Opus alone are within run-to-run noise (about 10%).
+
+### Effort levels
+
+Each model alone (no router) at low, medium and high effort, on 8 tasks (searches, bulk docstrings, rename, bug fix, new feature, explanation), 2 runs each. Fresh context per task.
+
+| Model | Effort | Correct | Cost (16 runs) | Time |
+|---|---|---|---|---|
+| Haiku 5.5 | low | 16/16 | $0.16 | 10.0 min |
+| Haiku 5.5 | medium | 16/16 | $0.20 | 10.3 min |
+| Haiku 5.5 | high | 16/16 | $0.27 | 14.2 min |
+| Sonnet 5.5 | low | 14/16 | $2.11 | 16.7 min |
+| Sonnet 5.5 | medium | 16/16 | $2.32 | 5.2 min |
+| Sonnet 5.5 | high | 15/16 | $2.48 | 10.9 min |
+| Opus 5.5 | low | 16/16 | $3.95 | 5.4 min |
+| Opus 5.5 | medium | 16/16 | $4.58 | 7.2 min |
+| Opus 5.5 | high | 16/16 | $4.94 | 8.2 min |
+
+- Higher effort never raised accuracy here. It cost 10 to 25% more.
+- Haiku 5.5 solved all 48 runs, including the bug fix and the new feature, at about 1/25 of Opus's cost, but took about twice as long.
+- Sonnet missed 3 of 48: the new feature twice at low effort, and one bulk docstring run at high.
+- Not acted on yet: 2 runs on one codebase is too little to move hard work to Haiku or lower effort without risking quality. A grader bug that counted docstring examples as `echo` calls was fixed and every run regraded.
+
 ## Splitting work across models (v0.4)
 
 **Question:** does handing parts of a task to cheaper subagents (Haiku, Sonnet) save money without hurting results, when the session model is Opus 5.5?

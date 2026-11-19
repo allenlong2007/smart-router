@@ -1,3 +1,4 @@
+import { readsALot } from './register'
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -328,4 +329,13 @@ test('savings are measured against the session model with its cache, not a cold 
   // Haiku: about $0.0015. Opus would have paid about $0.032: the first request
   // writes past the shared opening, the second reads it all from cache.
   expect((status as any).text).toMatch(/Estimated spend \$0\.00 vs \$0\.03 /)
+})
+
+test('prompts that load whole files stay on the session model; ordinary lookups do not', () => {
+  expect(readsALot('Read src/click/core.py and src/click/types.py in full (all of each file, not excerpts). Then give me an overview')).toBe(true)
+  expect(readsALot('Read the whole file and summarize it')).toBe(true)
+  expect(readsALot('Read a.py, b.py and c.py and tell me how they connect')).toBe(true)
+  expect(readsALot('What does parse_args in core.py return?')).toBe(false)
+  expect(readsALot('Read a.py and tell me what it does')).toBe(false)
+  expect(readsALot('List every place where os.environ is read')).toBe(false)
 })

@@ -130,6 +130,17 @@ const STANDARD =
   /\b(add|write|update|change|edit|tweak|adjust|convert|document|docstring|comment|rename|move|delete|remove|replace|format|lint|typo|bump|upgrade|translate|test for|unit test|readme|type hints?|log(ging)?)\b/i
 const TRIVIAL =
   /^(what('s| is| are| does)|where('s| is| are)|which|who|when|show|list|print|cat|open|read|define|summari[sz]e|explain (what|this|the)|run (the )?(tests?|lint|linter|build|formatter)|git (status|log|diff|branch|show)|how (do i|to|does)|what does|is there|does (this|it|the))\b/i
+// Loads whole files into the conversation. Measured: such a turn on Sonnet saved
+// about $0.30, then Opus paid about $0.65 to cache-write the 60k tokens it added.
+const BIG_READ = /\b(in full|full (file|files|text|source)|whole (file|files|module)|entire (file|files|module)|end to end|cover to cover|not excerpts|all of (each|it|them|the file))\b/i
+const READ_VERB = /\b(read|load|go through|study|look through|skim)\b/i
+const FILE_TOKEN = /\b[\w./-]+\.(py|ts|tsx|js|jsx|swift|go|rs|java|kt|rb|c|cc|cpp|h|m|md|json|ya?ml|toml)\b/gi
+
+export function readsALot(t: string): boolean {
+  if (BIG_READ.test(t)) return true
+  return READ_VERB.test(t) && (t.match(FILE_TOKEN)?.length ?? 0) >= 3
+}
+
 // Run a check and say what it printed; asking for a fix is not this.
 const RUN_AND_REPORT =
   /^(please )?run (the )?(tests?|test suite|lint(er)?|build|type ?check)\b(?!.*\b(fix|make|change|until|then (fix|update)))/i
@@ -241,6 +252,8 @@ function heuristic(text: string): Decision | undefined {
   if (THANKS.test(t)) return { tier: 'light', bucket: 'ack', reason: 'acknowledgement' }
   if (t.includes('```') || t.length > 500 || t.split('\n').length > 4)
     return { tier: 'full', bucket: 'long', reason: 'long or code-bearing prompt' }
+  // The session model would pay to cache-write it all on its next turn.
+  if (readsALot(t)) return { tier: 'full', bucket: 'big-read', reason: 'loads whole files into the conversation' }
   if (t.length <= 200 && RUN_AND_REPORT.test(t)) return { tier: 'light', bucket: 'run-report', reason: 'run and report' }
   if (COMPLEX.test(t)) return { tier: 'full', bucket: 'complex', reason: 'complex task keywords' }
   if (t.length <= 300 && STANDARD.test(t))

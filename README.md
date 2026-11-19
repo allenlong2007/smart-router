@@ -16,6 +16,8 @@ Simple lookups stop using up your Opus budget, and real engineering work still g
 
 A prompt the keyword rules can't place gets a one-word triage from Haiku (about 300 tokens). If the triage is unsure, the turn goes to the harder model.
 
+A prompt that loads whole files into the conversation ("read X and Y in full", "the whole file", or reading 3 or more files) stays on your session model. Your session model would otherwise pay to cache-write everything the cheap turn read, on its very next turn.
+
 Replying "yes", "go ahead" or "continue" keeps the previous turn's model, so approving a plan never moves the work itself to a cheaper model.
 
 ## Quality guards (moving up a model)
@@ -103,6 +105,8 @@ Earlier rounds, with Opus as the session model, over 67 graded runs (45 with the
 - **Small lookups** cost about 99% less on Haiku.
 
 v0.4 (subagent routing): Haiku search subagents found every item in their lists (33/33 and 65/65) for about $0.005 each. Splitting work on purpose did not save money on single tasks (see BENCHMARK.md).
+
+v0.5: in 8-turn sessions that start by reading 4,500 lines, every version got every turn right. v0.5 averaged $2.40 against $2.55 on Opus alone. It fixes a v0.4 trap where a whole-file read went to Sonnet and Opus then paid twice as much to take over. Higher effort settings cost 10 to 25% more and gained no accuracy on any model.
 
 See [BENCHMARK.md](BENCHMARK.md) for the method, every number, and the limits.
 
