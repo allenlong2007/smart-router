@@ -20,6 +20,10 @@ A prompt that loads whole files into the conversation ("read X and Y in full", "
 
 Replying "yes", "go ahead" or "continue" keeps the previous turn's model, so approving a plan never moves the work itself to a cheaper model.
 
+Messages the harness puts in your place keep the previous turn's model too: background-task results, Stop-hook feedback, usage-limit notes and the summary a resumed session starts with. They are never read as a complaint, even when a task result says something "failed".
+
+Deep into a conversation, a cheaper model whose own cache is cold is not started once the context passes 120k tokens, since writing the whole conversation into its cache costs more than it saves. A cheaper model that measured no saving at that length is retried only after 30 passed-over turns, not 8.
+
 ## Quality guards (moving up a model)
 
 A turn moves up one model, for the rest of that turn, when:

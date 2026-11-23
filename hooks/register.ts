@@ -181,6 +181,17 @@ const RUN_AND_REPORT =
   /^(please )?run (the )?(tests?|test suite|lint(er)?|build|type ?check)\b(?!.*\b(fix|make|change|until|then (fix|update)))/i
 const CONFIRM = /^(y(es|ep|eah)?|ok(ay)?|sure|go( ahead| for it)?|do it|continue|proceed|sounds good|lgtm|ship it|approved?)[\s.!,]*$/i
 const THANKS = /^(thanks?( you)?|ty|great|nice|cool|perfect|awesome|got it|👍)[\s.!]*$/i
+// Text the harness, a hook or a background task puts in the user's place:
+// background-task results, Stop-hook feedback, usage-limit notes, a resumed
+// summary. It continues the turn before it, so it keeps that turn's model.
+// Measured: a usage-limit note routed to Sonnet in a 700k-token session
+// cache-wrote it all to write four lines.
+const HARNESS =
+  /^\s*(<task-notification>|<system-reminder>|stop hook feedback:|\[(earlier )?usage[- ]limit|this session is being continued from a previous conversation|\[request interrupted)/i
+
+export function isHarnessMessage(t: string): boolean {
+  return HARNESS.test(t)
+}
 // The person says the last answer missed: the next turns stay on the full model.
 const COMPLAINT =
   /\b((that|it|this|you|the answer|your answer)('?s|'?re| is| are| was)( still| all)? (wrong|incorrect)|wrong (answer|again|file|fix)|didn'?t work|doesn'?t work|not working|still (fail|broken|wrong|not)|not what i (asked|wanted|meant)|try again|redo|that'?s not (it|right|what)|you missed|worse)/i
@@ -299,6 +310,7 @@ function keyword(re: RegExp, t: string): string {
 function heuristic(text: string): Decision | undefined {
   const t = text.trim()
   if (t === '') return { tier: 'full', bucket: 'continuation', reason: 'continuation' }
+  if (isHarnessMessage(t)) return { tier: lastTier, bucket: 'harness', reason: 'harness message, same tier as before' }
   if (CONFIRM.test(t)) return { tier: lastTier, bucket: lastBucket, reason: 'confirmation, same tier as before' }
   if (THANKS.test(t)) return { tier: 'light', bucket: 'ack', reason: 'acknowledgement' }
   if (!t.includes('```') && settings.scopedToSonnet && isScopedWork(t))
@@ -417,6 +429,9 @@ async function decide($: EngineInterface, text: string): Promise<Decision> {
   // A complaint about a cheap turn, or forcing a dearer model right after
   // one, is a mistake the record keeps against that kind of request.
   const forcedUp = override !== undefined && override !== 'light'
+  // A task result or hook note quoting "failed" or "didn't work" is not the person's complaint.
+  if (isHarnessMessage(text) && override === undefined && !(isDisabledByEnv || settings.mode === 'off'))
+    return heuristic(text)!
   if (lastTurn !== undefined && lastTurn.start !== 'full' && (COMPLAINT.test(text) || forcedUp)) {
     await $.store.set('learned', recordComplaint(await getLearned($), lastTurn.bucket, lastTurn.start))
     if (COMPLAINT.test(text)) stickyFullTurns = 2

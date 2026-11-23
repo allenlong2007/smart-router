@@ -113,3 +113,27 @@ test('a cheap tier that measured real savings keeps being used', async () => {
   for (let i = 0; i < 3; i++) l = recordEcon(l, econKey('ack', 'long'), 'light', 0.001, 0.013)
   expect(choose('light', 'ack', l, v, 'opus').tier).toBe('light')
 })
+
+test('a cheaper model with a cold cache is not started deep into a conversation', async () => {
+  // Context the session model does not hold either (a resumed or reloaded session).
+  const v: CacheView = { ...allCold(400_000), prefixWarm: { haiku: true, sonnet: true, opus: true }, band: 'long' }
+  const c = choose('medium', 'edit:add', {}, v, 'opus')
+  expect(c.tier).toBe('full')
+  expect(c.reason).toContain('cold')
+  // A short fresh session is unaffected.
+  const fresh: CacheView = { ...allCold(35_000), prefixWarm: { haiku: true, sonnet: true, opus: true } }
+  expect(choose('medium', 'edit:add', {}, fresh, 'opus').tier).toBe('medium')
+})
+
+test('a tier that saved nothing deep into a conversation waits far longer before it is retried', async () => {
+  const v = longHaikuWarm(80_000)
+  let l: Learned = {}
+  for (let i = 0; i < 4; i++) l = recordEcon(l, econKey('lookup:what', 'long'), 'light', 2.0, 1.5)
+  let retried = 0
+  for (let i = 0; i < 25; i++) {
+    const c = choose('light', 'lookup:what', l, v, 'opus')
+    l = c.learned
+    if (c.reason.includes('retrying')) retried++
+  }
+  expect(retried).toBe(0)
+})

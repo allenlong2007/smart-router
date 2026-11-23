@@ -1,4 +1,4 @@
-import { effortFor, isDiskWideSearch, isReadOnlySearch, isScopedWork, readsALot } from './register'
+import { effortFor, isDiskWideSearch, isHarnessMessage, isReadOnlySearch, isScopedWork, readsALot } from './register'
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -422,4 +422,38 @@ test('a cheap turn is sent back to the project instead of scanning the disk; the
   await step($, 't2')
   const r2 = (await $.tool.call({ tool: 'Bash', command: 'find / -name x' } as any)) as any
   expect(r2.deny).toBeUndefined()
+})
+
+test("harness messages are recognised; the person's own words are not", async () => {
+  expect(isHarnessMessage('<task-notification> <summary>Commit security review found 2 issues</summary>')).toBe(true)
+  expect(isHarnessMessage('Stop hook feedback:\nSecond-brain check: this session changed project files.')).toBe(true)
+  expect(isHarnessMessage("[Earlier usage-limit notes no longer apply. Continue working normally.]")).toBe(true)
+  expect(isHarnessMessage('[Usage limit reached; a short grace allowance remains]')).toBe(true)
+  expect(isHarnessMessage('This session is being continued from a previous conversation that ran out of context.')).toBe(true)
+  expect(isHarnessMessage('what does the stop hook feedback mean?')).toBe(false)
+  expect(isHarnessMessage('Reloaded, retest')).toBe(false)
+})
+
+test('a harness message keeps the model of the turn before it and is never taken as a complaint', async ($, on) => {
+  const sent: string[] = []
+  engine(on, sent, { triage: 'trivial' })
+  await begin($)
+
+  await $.turn.start({ text: 'refactor the auth module to use sessions', turnId: 't1' })
+  await step($, 't1')
+  await $.turn.complete({ turnId: 't1', answer: '' } as any)
+  await $.turn.start({ text: '[Earlier usage-limit notes no longer apply. Continue working normally.]', turnId: 't2' })
+  await step($, 't2')
+  await $.turn.complete({ turnId: 't2', answer: '' } as any)
+  await $.turn.start({ text: 'what does main.py do?', turnId: 't3' })
+  await step($, 't3')
+  await $.turn.complete({ turnId: 't3', answer: '' } as any)
+  await $.turn.start({ text: "<task-notification> <summary>Tests didn't work: 2 failed</summary> </task-notification>", turnId: 't4' })
+  await step($, 't4')
+  await $.turn.complete({ turnId: 't4', answer: '' } as any)
+  await $.turn.start({ text: 'what does util.py do?', turnId: 't5' })
+  await step($, 't5')
+
+  // t4 continues the Haiku turn; t5 is not pinned to the session model by a false complaint.
+  expect(sent).toEqual([SESSION_MODEL, SESSION_MODEL, 'haiku', 'haiku', 'haiku'])
 })

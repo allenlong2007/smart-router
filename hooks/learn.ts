@@ -48,6 +48,14 @@ const MAX_COMPLAINT_RATE = 0.15
 // After this many turns of being passed over, a tier gets one more try, so a
 // kind of request is not locked out by a bad patch.
 const RETRY_AFTER = 8
+// Deep in a conversation a retry pays a cold cache write of the whole context,
+// so a tier ruled uneconomic there waits much longer before its next try.
+const RETRY_AFTER_LONG = 30
+// A cheaper model whose own cache is cold is not started past this many
+// context tokens: writing the conversation into its cache costs more than the
+// session model's cache reads save (measured: 700k tokens cold on Sonnet cost
+// about $2.60 for a four-line reply).
+const MAX_COLD_CONTEXT = 120_000
 // Decayed turn count a record needs before it rules anything: about three
 // recent turns (three in a row decay to 2.79).
 const MIN_EVIDENCE = 2.5
@@ -206,6 +214,10 @@ export function choose(
       continue
     }
     const fam = TIER_FAMILY[t]
+    if (v.cached[fam] === 0 && v.context > MAX_COLD_CONTEXT) {
+      notes.push(`${t} cache is cold for ${Math.round(v.context / 1000)}k tokens`)
+      continue
+    }
     // The session model writes this turn's tokens when it next runs.
     const own = estimateCost(fam, steps, out, v, growth) + v.returnChance * growth * PRICE[full].write
     // An escalation goes to the next rung or, where that is dearer, straight to the session model.
@@ -219,7 +231,8 @@ export function choose(
       // Passed-over counts live on the record that ruled the tier out.
       const key = isUnreliable ? bucket : ekey
       const rec = (isUnreliable ? s : econ)!
-      if (rec.skipped + 1 < RETRY_AFTER) {
+      const retryAfter = !isUnreliable && v.band === 'long' ? RETRY_AFTER_LONG : RETRY_AFTER
+      if (rec.skipped + 1 < retryAfter) {
         l = { ...l, [key]: { ...l[key], [t]: { ...rec, skipped: rec.skipped + 1 } } }
         notes.push(isUnreliable ? `${t} fails ${Math.round(fr * 100)}% here` : `${t} saved nothing here (${Math.round(ratio! * 100)}% of the cost)`)
         continue
